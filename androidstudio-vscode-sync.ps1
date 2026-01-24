@@ -13,17 +13,29 @@ while ($true) {
 
     Write-Host "Checking if Android Studio is running..."
 
-    $androidStudioRunning = Get-Process |
-        Where-Object { $_.ProcessName -like "studio*" }
+    # Fetch the process object so we can check the Window Title
+    $asProcess = Get-Process | 
+        Where-Object { $_.ProcessName -like "studio*" } | 
+        Select-Object -First 1 -ErrorAction SilentlyContinue
 
-    if (-not $androidStudioRunning) {
+    # 1. Check if Process exists
+    if (-not $asProcess) {
         Write-Host "Android Studio NOT running"
         $VSCodeOpened = $false
         Start-Sleep $checkInterval
         continue
     }
 
-    Write-Host "Android Studio detected"
+    # 2. Security Check: Block if stuck on "Welcome" screen
+    # This prevents opening the *previous* project while you are choosing a new one
+    if ($asProcess.MainWindowTitle -match "Welcome to Android Studio") {
+        Write-Host "Android Studio is at Project Selection (Welcome Screen). Waiting..."
+        $VSCodeOpened = $false # Reset this so we can trigger again when a real project loads
+        Start-Sleep $checkInterval
+        continue
+    }
+
+    Write-Host "Android Studio detected (Project Loaded)"
 
     # Locate latest Android Studio config directory
     Write-Host "Locating latest Android Studio config directory..."
@@ -78,17 +90,40 @@ while ($true) {
         if ((Test-Path $projectPath) -and (-not $VSCodeOpened)) {
 
             Write-Host "Waiting $delayBeforeOpen seconds before opening VS Code..."
+            
+            $abortLaunch = $false
 
+            # Smart Wait Loop: Checks status every second
             for ($i = $delayBeforeOpen; $i -gt 0; $i--) {
+                
+                # Re-check if Android Studio is still alive and not back at Welcome screen
+                $currentProc = Get-Process | Where-Object { $_.ProcessName -like "studio*" } | Select-Object -First 1
+                
+                if (-not $currentProc) {
+                    Write-Host "Android Studio closed during wait. Aborting launch."
+                    $abortLaunch = $true
+                    break
+                }
+
+                if ($currentProc.MainWindowTitle -match "Welcome to Android Studio") {
+                    Write-Host "Returned to Welcome Screen during wait. Aborting launch."
+                    $abortLaunch = $true
+                    break
+                }
+
                 Write-Host "Opening VS Code in $i seconds..."
                 Start-Sleep 1
             }
 
-            Write-Host "Opening VS Code now..."
-            Start-Process "code" -ArgumentList "`"$projectPath`""
-
-            $VSCodeOpened = $true
-            Write-Host "VS Code opened successfully"
+            if (-not $abortLaunch) {
+                Write-Host "Opening VS Code now..."
+                Start-Process "code" -ArgumentList "`"$projectPath`""
+                $VSCodeOpened = $true
+                Write-Host "VS Code opened successfully"
+            } else {
+                # If we aborted, ensure flag is false so we can try again later
+                $VSCodeOpened = $false
+            }
         }
         else {
             Write-Host "VS Code already opened or project path invalid"
