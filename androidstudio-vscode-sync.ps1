@@ -1,137 +1,195 @@
 Clear-Host
 
 Write-Host "--------------------------------------------"
-Write-Host "Android Studio → VS Code Sync Script"
+Write-Host "Android Studio -> VS Code Sync Script"
 Write-Host "--------------------------------------------"
+Write-Host "Mode: XML Option Tag Parsing (Fixing Time: 0)"
 Write-Host ""
 
 $VSCodeOpened = $false
 $checkInterval = 5
 $delayBeforeOpen = 60
+$lastDetectedPath = ""
+
+# Helper: Convert Unix Milliseconds to Readable Date
+function Convert-MsToDate($ms) {
+    if (-not $ms -or $ms -eq 0) { return "N/A" }
+    $seconds = [math]::Floor($ms / 1000)
+    return (Get-Date "1970-01-01 00:00:00Z").AddSeconds($seconds).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+}
 
 while ($true) {
 
     Write-Host "Checking if Android Studio is running..."
 
-    # Fetch the process object so we can check the Window Title
+    # 1. Check Process & Window Title
     $asProcess = Get-Process | 
         Where-Object { $_.ProcessName -like "studio*" } | 
         Select-Object -First 1 -ErrorAction SilentlyContinue
 
-    # 1. Check if Process exists
     if (-not $asProcess) {
         Write-Host "Android Studio NOT running"
         $VSCodeOpened = $false
+        $lastDetectedPath = ""
         Start-Sleep $checkInterval
         continue
     }
 
-    # 2. Security Check: Block if stuck on "Welcome" screen
-    # This prevents opening the *previous* project while you are choosing a new one
-    if ($asProcess.MainWindowTitle -match "Welcome to Android Studio") {
-        Write-Host "Android Studio is at Project Selection (Welcome Screen). Waiting..."
-        $VSCodeOpened = $false # Reset this so we can trigger again when a real project loads
+    $windowTitle = $asProcess.MainWindowTitle
+
+    # 2. Gatekeeper: Welcome Screen
+    if ($windowTitle -match "Welcome to Android Studio") {
+        Write-Host "Status: Welcome Screen (No project loaded)"
+        $VSCodeOpened = $false
+        $lastDetectedPath = ""
         Start-Sleep $checkInterval
         continue
     }
 
-    Write-Host "Android Studio detected (Project Loaded)"
+    Write-Host "Android Studio detected. Reading History..."
 
-    # Locate latest Android Studio config directory
-    Write-Host "Locating latest Android Studio config directory..."
-
+    # 3. Find Config Directory
     $studioConfigDir = Get-ChildItem "$env:APPDATA\Google" `
         -Directory -Filter "AndroidStudio*" -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
 
     if (-not $studioConfigDir) {
-        Write-Host "No Android Studio config directory found"
+        Write-Host "Config directory not found."
         Start-Sleep $checkInterval
         continue
     }
-
-    Write-Host "Using config directory:"
-    Write-Host $studioConfigDir.FullName
 
     $recentProjectsFile = Join-Path $studioConfigDir.FullName "options\recentProjects.xml"
 
     if (-not (Test-Path $recentProjectsFile)) {
-        Write-Host "recentProjects.xml not found"
+        Write-Host "recentProjects.xml not found."
         Start-Sleep $checkInterval
         continue
     }
 
-    Write-Host "recentProjects.xml found at:"
-    Write-Host $recentProjectsFile
-    Write-Host "Reading last opened project..."
-
     try {
         [xml]$xml = Get-Content $recentProjectsFile
 
-        $rawPath = $xml.application.component.option |
-            Where-Object { $_.name -eq "lastOpenedProject" } |
-            Select-Object -ExpandProperty value
-
-        if (-not $rawPath) {
-            Write-Host "No active project detected yet"
+        # 4. Parse History Map
+        $component = $xml.application.component | Where-Object { $_.name -eq "RecentProjectsManager" }
+        $mapOption = $component.option | Where-Object { $_.name -eq "additionalInfo" }
+        
+        if (-not $mapOption) {
+            Write-Host "History map not found in XML."
             Start-Sleep $checkInterval
             continue
         }
 
-        Write-Host "Raw project path:"
-        Write-Host $rawPath
+        $entries = $mapOption.map.entry
+        $projectCandidates = @()
 
-        $projectPath = $rawPath -replace '\$USER_HOME\$', $env:USERPROFILE
-
-        Write-Host "Resolved project path:"
-        Write-Host $projectPath
-
-        if ((Test-Path $projectPath) -and (-not $VSCodeOpened)) {
-
-            Write-Host "Waiting $delayBeforeOpen seconds before opening VS Code..."
+        foreach ($entry in $entries) {
+            $rawKey = $entry.key
+            $resolvedPath = $rawKey -replace '\$USER_HOME\$', $env:USERPROFILE
             
-            $abortLaunch = $false
+            # --- XML PARSING FIX ---
+            # Timestamps are inside <option> tags, not direct properties.
+            $metaInfo = $entry.value.RecentProjectMetaInfo
+            $optionsList = $metaInfo.option 
 
-            # Smart Wait Loop: Checks status every second
+            $ts = 0
+            
+            # 1. Try to find 'activationTimestamp' (Usually the most accurate for "Last Used")
+            $activationOpt = $optionsList | Where-Object { $_.name -eq "activationTimestamp" }
+            if ($activationOpt) { 
+                $ts = [int64]$activationOpt.value 
+            } 
+            
+            # 2. If not found (or 0), use 'projectOpenTimestamp' as you requested
+            if ($ts -eq 0) {
+                $openOpt = $optionsList | Where-Object { $_.name -eq "projectOpenTimestamp" }
+                if ($openOpt) { 
+                    $ts = [int64]$openOpt.value 
+                }
+            }
+            # -----------------------
+
+            $projName = Split-Path $resolvedPath -Leaf
+
+            $projectCandidates += [PSCustomObject]@{
+                RawPath = $rawKey
+                Path = $resolvedPath
+                Name = $projName
+                Timestamp = [long]$ts
+                ReadableTime = Convert-MsToDate $ts
+            }
+        }
+
+        # 5. SORT BY TIMESTAMP DESCENDING
+        $sortedProjects = $projectCandidates | Sort-Object Timestamp -Descending
+
+        $targetProject = $null
+
+        # 6. Step-Back Logic
+        Write-Host "Window Title: '$windowTitle'"
+        Write-Host "Scanning History (Order: Newest -> Oldest):"
+        
+        $rank = 1
+        foreach ($proj in $sortedProjects) {
+            $safeName = [Regex]::Escape($proj.Name)
+            
+            Write-Host "  [$rank] Name: $($proj.Name)"
+            Write-Host "      Time: $($proj.Timestamp) | Date: $($proj.ReadableTime)"
+            
+            if ($windowTitle -match $safeName) {
+                Write-Host "      Result: [MATCH] (Selected)"
+                $targetProject = $proj
+                break 
+            } else {
+                Write-Host "      Result: No Match"
+            }
+            $rank++
+        }
+
+        if (-not $targetProject) {
+            Write-Host "No project matches the current window title."
+            Start-Sleep $checkInterval
+            continue
+        }
+
+        $projectPath = $targetProject.Path
+        Write-Host ""
+        Write-Host ">> Target Identified: $projectPath"
+
+        # 7. Launch Execution
+        if ((Test-Path $projectPath) -and ((-not $VSCodeOpened) -or ($projectPath -ne $lastDetectedPath))) {
+
+            Write-Host "Waiting $delayBeforeOpen seconds..."
+            
+            $abort = $false
             for ($i = $delayBeforeOpen; $i -gt 0; $i--) {
+                $curr = Get-Process | Where-Object { $_.ProcessName -like "studio*" } | Select-Object -First 1
                 
-                # Re-check if Android Studio is still alive and not back at Welcome screen
-                $currentProc = Get-Process | Where-Object { $_.ProcessName -like "studio*" } | Select-Object -First 1
+                if (-not $curr) { $abort = $true; break }
+                if ($curr.MainWindowTitle -match "Welcome to Android Studio") { $abort = $true; break }
                 
-                if (-not $currentProc) {
-                    Write-Host "Android Studio closed during wait. Aborting launch."
-                    $abortLaunch = $true
-                    break
-                }
-
-                if ($currentProc.MainWindowTitle -match "Welcome to Android Studio") {
-                    Write-Host "Returned to Welcome Screen during wait. Aborting launch."
-                    $abortLaunch = $true
-                    break
-                }
-
                 Write-Host "Opening VS Code in $i seconds..."
                 Start-Sleep 1
             }
 
-            if (-not $abortLaunch) {
-                Write-Host "Opening VS Code now..."
+            if (-not $abort) {
+                Write-Host "Launching VS Code..."
                 Start-Process "code" -ArgumentList "`"$projectPath`""
                 $VSCodeOpened = $true
-                Write-Host "VS Code opened successfully"
+                $lastDetectedPath = $projectPath
+                Write-Host "Done."
             } else {
-                # If we aborted, ensure flag is false so we can try again later
+                Write-Host "Launch Aborted."
                 $VSCodeOpened = $false
             }
         }
         else {
-            Write-Host "VS Code already opened or project path invalid"
+            # Silent idle
         }
     }
     catch {
-        Write-Host "Error reading recentProjects.xml"
-        Write-Host $_
+        Write-Host "Error: $_"
     }
 
     Start-Sleep $checkInterval
