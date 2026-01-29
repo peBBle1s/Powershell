@@ -41,7 +41,7 @@ This file controls:
   "Email": {
     "Enable": true,
     "To": "your-email@gmail.com",
-    "From": "File Organizer Bot <file.organizer.test@gmail.com>",
+    "From": "File Organizer Bot",
     "SMTPServer": "smtp.gmail.com",
     "Port": 587,
     "UseSSL": true,
