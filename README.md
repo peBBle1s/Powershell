@@ -4,7 +4,22 @@ A curated collection of PowerShell scripts designed to automate development work
 
 ## 📂 Repository Structure
 
+-Getting Started
+-Clone the repository
+
+-Set Execution Policy: You may need to allow script execution on your machine:
+  (PowerShell only)
+  Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+Navigate and Run: Go to the specific folder of the script you want to use and follow the specific README.md instructions in that folder.
+
 ```text
+
+┌────────────────────────────────────────┐
+│                STRUCTURE               │
+└────────────────────────────────────────┘
+
+
 Powershell
 │   .gitignore
 │   androidstudio-vscode-sync.ps1
