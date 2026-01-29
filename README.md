@@ -1,4 +1,4 @@
-[![Latest Release](https://img.shields.io/github/v/release/yourusername/Powershell?style=for-the-badge&label=Download%20Latest%20Version&color=2ea44f)](https://github.com/yourusername/Powershell/releases/latest)
+[![Latest Release](https://img.shields.io/github/v/release/peBBle1s/Powershell?style=for-the-badge&label=Download%20Latest%20Version&color=2ea44f)](https://github.com/peBBle1s/Powershell/releases/latest)
 
 # PowerShell Automation Suite
 
