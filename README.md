@@ -1,3 +1,5 @@
+[![Latest Release](https://img.shields.io/github/v/release/yourusername/Powershell?style=for-the-badge&label=Download%20Latest%20Version&color=2ea44f)](https://github.com/yourusername/Powershell/releases/latest)
+
 # PowerShell Automation Suite
 
 A curated collection of PowerShell scripts designed to automate development workflows, organize files, and perform system maintenance.
