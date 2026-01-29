@@ -1,0 +1,9 @@
+# Ignore all config files in any folder
+**/*.config.json
+
+# Ignore credential files
+**/gmail-cred.xml
+
+# Ignore logs
+**/_OrganizerLogs/
+**/FileMoveLog.csv
