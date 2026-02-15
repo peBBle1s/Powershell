@@ -1,120 +1,189 @@
 #!/usr/bin/env pwsh
-# Audio Output Switcher - PowerShell 7 Edition
+# ============================================================
+# 🎚️ AUDIO COMMAND CENTER (Fixed & Stable)
+# ============================================================
 
+# -------------------- AUTO ELEVATE --------------------
+if (-not ([Security.Principal.WindowsPrincipal] `
+    [Security.Principal.WindowsIdentity]::GetCurrent()
+    ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+
+    Write-Host "Restarting as Administrator..." -ForegroundColor Yellow
+    Start-Process pwsh -Verb RunAs -ArgumentList "-File `"$PSCommandPath`""
+    exit
+}
+
+# -------------------- CONFIG --------------------
+$NirSoftUrl = "https://www.nirsoft.net/utils/soundvolumeview-x64.zip"
+$ToolPath   = Join-Path $PSScriptRoot "SoundVolumeView.exe"
+
+# -------------------- DEPENDENCIES --------------------
 function Ensure-Dependencies {
-    # Check if the module is imported or available
+
+    # AudioDeviceCmdlets
     if (-not (Get-Module -ListAvailable -Name AudioDeviceCmdlets)) {
-        Write-Host "⚠️  Required module 'AudioDeviceCmdlets' not found." -ForegroundColor Yellow
-        $confirm = Read-Host "Do you want to install it now? (y/n)"
-        if ($confirm -eq 'y') {
-            Write-Host "Installing module... (This may require Admin rights)" -ForegroundColor Cyan
-            Install-Module -Name AudioDeviceCmdlets -Force -Scope CurrentUser -AllowClobber
-            Import-Module AudioDeviceCmdlets
-        } else {
-            Write-Host "❌ Script cannot run without this module. Exiting." -ForegroundColor Red
+        Write-Host "Installing AudioDeviceCmdlets..." -ForegroundColor Yellow
+        Install-Module -Name AudioDeviceCmdlets -Force -Scope CurrentUser -AllowClobber
+    }
+    Import-Module AudioDeviceCmdlets
+
+    # SoundVolumeView
+    if (-not (Test-Path $ToolPath)) {
+        Write-Host "Downloading SoundVolumeView..." -ForegroundColor Cyan
+        $zipPath = Join-Path $PSScriptRoot "svv.zip"
+
+        try {
+            Invoke-WebRequest -Uri $NirSoftUrl -OutFile $zipPath
+            Expand-Archive -Path $zipPath -DestinationPath $PSScriptRoot -Force
+            Remove-Item $zipPath -Force
+        } catch {
+            Write-Host "Failed to download SoundVolumeView." -ForegroundColor Red
             exit
-        }
-    } else {
-        # Import if not already active
-        if (-not (Get-Module -Name AudioDeviceCmdlets)) {
-            Import-Module AudioDeviceCmdlets
         }
     }
 }
 
+# -------------------- HEADER --------------------
 function Show-Header {
     Clear-Host
-    Write-Host "`n   🔊  AUDIO COMMAND CENTER  " -BackgroundColor DarkCyan -ForegroundColor White
+    Write-Host "`n   🔊 AUDIO COMMAND CENTER" -BackgroundColor DarkCyan -ForegroundColor White
     Write-Host "   ------------------------" -ForegroundColor DarkCyan
+
+    try {
+        $dev = Get-AudioDevice -Playback
+        $mute = if ($dev.Mute) { "MUTED" } else { "ON" }
+        Write-Host "   Default: $($dev.Name)"
+        Write-Host "   Volume:  $($dev.Volume)% [$mute]"
+    } catch {
+        Write-Host "   No active playback device detected"
+    }
+
+    Write-Host "   ------------------------`n" -ForegroundColor DarkCyan
 }
 
-function Select-AudioSource {
-    Show-Header
-    Write-Host "`nScanning devices..." -ForegroundColor Gray
+# -------------------- GLOBAL SWITCH --------------------
+function Select-GlobalDevice {
 
-    # Get playback devices
     $devices = Get-AudioDevice -List | Where-Object Type -eq 'Playback'
-    
-    if (-not $devices) {
-        Write-Host "❌ No playback devices found." -ForegroundColor Red
-        Start-Sleep -Seconds 2
+    if (-not $devices) { return }
+
+    Write-Host "Select GLOBAL Output Device:`n"
+
+    for ($i=0; $i -lt $devices.Count; $i++) {
+        $marker = if ($devices[$i].Default) { "➤" } else { " " }
+        Write-Host "$($i+1). $marker $($devices[$i].Name)"
+    }
+
+    $sel = Read-Host "`nEnter number"
+    if ($sel -match '^\d+$' -and $sel -le $devices.Count) {
+        Set-AudioDevice -Index $devices[$sel-1].Index
+        Write-Host "Switched successfully." -ForegroundColor Green
+        Start-Sleep 1
+    }
+}
+
+# -------------------- PER APP ROUTING (FIXED) --------------------
+function Set-AppRouting {
+
+    Write-Host "Scanning active audio apps..." -ForegroundColor Yellow
+    $csvFile = Join-Path $PSScriptRoot "apps.csv"
+
+    if (Test-Path $csvFile) { Remove-Item $csvFile -Force }
+
+    # Export current audio sessions
+    Start-Process -FilePath $ToolPath -ArgumentList "/scomma `"$csvFile`"" -Wait -NoNewWindow
+
+    if (-not (Test-Path $csvFile)) {
+        Write-Host "Scan failed." -ForegroundColor Red
         return
     }
 
-    # Display list nicely
-    Write-Host "`nAvailable Output Devices:" -ForegroundColor Cyan
-    
-    for ($i = 0; $i -lt $devices.Count; $i++) {
-        $dev = $devices[$i]
-        $marker = "  "
-        $color = "White"
+    $allData = Import-Csv $csvFile
 
-        # Highlight current default device
-        if ($dev.Default) {
-            $marker = "➤ "
-            $color = "Green"
-        }
+    $apps = $allData | Where-Object {
+        $_.Type -eq "Application" -and $_."Process Path"
+    } | Select-Object -Unique Name, "Process Path"
 
-        Write-Host "$($i+1). $marker$($dev.Name)" -ForegroundColor $color
+    if (-not $apps) {
+        Write-Host "No active audio apps found. Play audio first." -ForegroundColor Red
+        Start-Sleep 2
+        return
     }
 
-    Write-Host ""
-    $selection = Read-Host "Enter number to switch (or 'b' to go back)"
-
-    if ($selection -eq 'b') { return }
-
-    # Validate input (PS7 smart checking)
-    if ($selection -match '^\d+$' -and $selection -gt 0 -and $selection -le $devices.Count) {
-        $target = $devices[$selection - 1]
-        
-        # Set the device
-        Set-AudioDevice -Index $target.Index | Out-Null
-        
-        Write-Host "`n✅ Switched to: $($target.Name)" -ForegroundColor Green
-        
-        # Play a sound to confirm (Optional)
-        [System.Console]::Beep(440, 200)
-    } else {
-        Write-Host "❌ Invalid selection." -ForegroundColor Red
+    Write-Host "`nActive Apps:`n"
+    for ($i=0; $i -lt $apps.Count; $i++) {
+        Write-Host "$($i+1). $($apps[$i].Name)"
     }
-    
-    Start-Sleep -Seconds 2
+
+    $appSel = Read-Host "`nSelect app number"
+    if ($appSel -notmatch '^\d+$' -or $appSel -gt $apps.Count) { return }
+
+    $appExe = Split-Path $apps[$appSel-1]."Process Path" -Leaf
+
+    # Device selection
+    $devices = Get-AudioDevice -List | Where-Object Type -eq 'Playback'
+
+    Write-Host "`nSelect Target Device:`n"
+    for ($i=0; $i -lt $devices.Count; $i++) {
+        Write-Host "$($i+1). $($devices[$i].Name)"
+    }
+
+    $devSel = Read-Host "`nSelect device number"
+    if ($devSel -notmatch '^\d+$' -or $devSel -gt $devices.Count) { return }
+
+    $targetDev = $devices[$devSel-1]
+
+    Write-Host "`nApplying routing to $appExe ..." -ForegroundColor Cyan
+
+    $roles = @(0,1,2)
+
+    foreach ($role in $roles) {
+        Start-Process -FilePath $ToolPath `
+            -ArgumentList "/SetAppDefault `"$($targetDev.ID)`" $role `"$appExe`"" `
+            -Wait -NoNewWindow
+    }
+
+    Write-Host "Route applied." -ForegroundColor Green
+    Write-Host "IMPORTANT: Pause and resume audio in the app." -ForegroundColor Yellow
+    Start-Sleep 2
 }
 
-# --- Main Execution ---
-
+# -------------------- MAIN --------------------
 Ensure-Dependencies
 
-$running = $true
+while ($true) {
 
-while ($running) {
     Show-Header
-    
-    Write-Host "`n1. 🎧 Select Audio Out Source"
-    Write-Host "2. 🚧 [Future Feature]"
-    Write-Host "3. 🚫 No Action"
-    Write-Host "4. 🚪 Exit"
+
+    Write-Host "1. Global Output Switcher"
+    Write-Host "2. Per-App Audio Routing"
+    Write-Host "3. Set Master Volume"
+    Write-Host "4. Toggle Mute"
+    Write-Host "5. Open Windows Audio Settings"
+    Write-Host "Q. Quit"
     Write-Host ""
 
-    $choice = Read-Host "Choose an option"
+    $choice = Read-Host "Select option"
 
     switch ($choice) {
-        '1' { Select-AudioSource }
-        '2' { 
-            Write-Host "`n   This feature is not yet decided." -ForegroundColor Yellow
-            Start-Sleep -Seconds 1
+
+        '1' { Select-GlobalDevice }
+        '2' { Set-AppRouting }
+        '3' {
+            $v = Read-Host "Enter Volume (0-100)"
+            if ($v -match '^\d+$' -and $v -le 100) {
+                Set-AudioDevice -PlaybackVolume $v
+            }
         }
-        '3' { 
-            Write-Host "`n   ... (Silence) ..." -ForegroundColor Gray
-            Start-Sleep -Seconds 1 
+        '4' {
+            $dev = Get-AudioDevice -Playback
+            Set-AudioDevice -PlaybackMute (-not $dev.Mute)
         }
-        { $_ -in '4','q','exit' } { 
-            Write-Host "`nGoodbye! 👋" -ForegroundColor Cyan
-            $running = $false 
+        '5' {
+            Start-Process "ms-settings:apps-volume"
         }
-        Default { 
-            Write-Host "   Invalid input." -ForegroundColor Red 
-            Start-Sleep -Milliseconds 500
+        { $_ -in 'q','quit','exit' } {
+            exit
         }
     }
 }
