@@ -7,3 +7,4 @@
 # Ignore logs
 **/_OrganizerLogs/
 **/FileMoveLog.csv
+**/*.log
