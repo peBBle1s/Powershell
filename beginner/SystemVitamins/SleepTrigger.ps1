@@ -57,7 +57,7 @@ while ($true) {
     $hasYouTube = [bool]$braveYouTube
     
     # Check if time is between 1:30 AM and 6:00 AM
-    $isAfterStart = ($now.Hour -eq 1 -and $now.Minute -ge 30) -or ($now.Hour -gt 1)
+    $isAfterStart = ($now.Hour -eq 2 -and $now.Minute -ge 01) -or ($now.Hour -gt 1)
     $isBeforeEnd = ($now.Hour -lt 6)
     $isWithinTimeWindow = ($isAfterStart -and $isBeforeEnd)
     
